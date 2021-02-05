@@ -78,7 +78,7 @@ can do that.
 
 Rendering providers in regular application code is fine, but one nice way to
 create a logical separation of concerns (which will help with maintainability)
-is to create a component who's sole purpose is to manage and provide the
+is to create a component whose sole purpose is to manage and provide the
 authentication state. So for this extra credit, you need to create an
 `AuthProvider` component. Most of the code for this component will be moved from
 the `src/app.js` module and you'll move it to the `src/context/auth-context.js`
