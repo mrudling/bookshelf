@@ -60,7 +60,7 @@ For comparison, here's our `LoginFormModal`'s API:
 ```
 
 It's definitely more code to use than our existing `LoginFormModal`, but it
-actually is simpler and more flexible and will suite our future use cases
+actually is simpler and more flexible and will suit our future use cases
 without getting any more complex.
 
 For example, consider a situation where we don't want to only render a form but
