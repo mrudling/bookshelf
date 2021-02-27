@@ -19,6 +19,7 @@ import {
 import * as colors from 'styles/colors'
 import {useAsync} from 'utils/hooks'
 import {CircleButton, Spinner} from './lib'
+import {unstable_trace as trace} from 'scheduler/tracing'
 
 function TooltipButton({label, highlight, onClick, icon, ...rest}) {
   const {isLoading, isError, error, run, reset} = useAsync()
@@ -27,7 +28,9 @@ function TooltipButton({label, highlight, onClick, icon, ...rest}) {
     if (isError) {
       reset()
     } else {
-      run(onClick())
+      trace(`Click ${label}`, performance.now(), () => {
+        run(onClick())
+      })
     }
   }
 
