@@ -1,76 +1,212 @@
 import * as React from 'react'
-import {render, screen, waitFor} from '@testing-library/react'
-import {queryCache} from 'react-query'
-import {buildUser, buildBook} from 'test/generate'
-import * as auth from 'auth-provider'
-import {AppProviders} from 'context'
+import {
+  render,
+  loginAsUser,
+  screen,
+  waitFor,
+  waitForLoadingToFinish,
+} from 'test/app-test-utils'
+import {buildBook, buildListItem} from 'test/generate'
+import * as booksDB from 'test/data/books'
+import userEvent from '@testing-library/user-event'
+import * as listItemsDB from 'test/data/list-items'
 import {App} from 'app'
+import faker from 'faker'
+import {formatDate} from 'utils/misc'
+import {server, rest} from 'test/server'
 
 // 📜 https://developer.mozilla.org/en-US/docs/Web/API/History/pushState
 // 📜 https://testing-library.com/docs/dom-testing-library/api-async#waitfor
 
-afterEach(async () => {
-  queryCache.clear()
-  await auth.logout()
-})
+async function renderBookScreen({user, book, listItem} = {}) {
+  if (user === undefined) {
+    user = await loginAsUser()
+  }
 
-test('renders all the book information', async () => {
-  localStorage.setItem(auth.localStorageKey, '__auth_provider_token__')
+  if (book === undefined) {
+    book = await booksDB.create(buildBook())
+  }
 
-  const user = buildUser()
-  const book = buildBook()
+  if (listItem === undefined) {
+    listItem = await listItemsDB.create(buildListItem({owner: user, book}))
+  }
+
   const route = `/book/${book.id}`
   window.history.pushState({}, 'page title', route)
 
-  window.fetch = async (url, config) => {
-    const originalFetch = window.fetch
-    if (url.endsWith('/me')) {
-      return Promise.resolve({ok: true, json: async () => ({user})})
-    }
+  const utils = await render(<App />, {route, user})
 
-    if (url.endsWith('/list-items')) {
-      return Promise.resolve({ok: true, json: async () => ({listItems: []})})
-    }
+  return {...utils, book, listItem, user}
+}
 
-    if (url.endsWith(`/books/${book.id}`)) {
-      return Promise.resolve({ok: true, json: async () => ({book})})
-    }
+test('renders all the book information', async () => {
+  const {book} = await renderBookScreen({listItem: null})
 
-    return originalFetch
-  }
+  expect(screen.getByRole('heading', {name: book.title})).toBeInTheDocument()
+  expect(screen.getByText(book.author)).toBeInTheDocument()
+  expect(screen.getByText(book.publisher)).toBeInTheDocument()
+  expect(screen.getByText(book.synopsis)).toBeInTheDocument()
+  expect(screen.getByRole('img', {name: /book cover/i})).toHaveAttribute(
+    'src',
+    book.coverImageUrl,
+  )
+  expect(screen.getByRole('button', {name: /add to list/i})).toBeInTheDocument()
+  expect(
+    screen.queryByRole('button', {name: /remove from list/i}),
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('button', {name: /mark as read/i}),
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('button', {name: /mark as unread/i}),
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('textarea', {name: /notes/i}),
+  ).not.toBeInTheDocument()
+  expect(screen.queryByRole('radio', {name: /star/i})).not.toBeInTheDocument()
+  expect(screen.queryByLabelText(/start date/i)).not.toBeInTheDocument()
+})
 
-  render(<App />, {wrapper: AppProviders})
+test('can create a list item for the book', async () => {
+  const {book} = await renderBookScreen({listItem: null})
 
-  waitFor(() => {
-    const isLoading = false
-    if (queryCache.isFetching() || isLoading) {
-      throw new Error('some error')
-    }
-    expect(screen.getByRole('heading', {name: book.title})).toBeInTheDocument()
-    expect(book.author).toBeInTheDocument()
-    expect(book.publisher).toBeInTheDocument()
-    expect(book.synopsis).toBeInTheDocument()
-    expect(book.id).toBeInTheDocument()
-    expect(screen.getByRole('img', {name: /book cover/i})).toHaveAttribute(
-      'src',
-      book.coverImageUrl,
+  await waitFor(() => {
+    userEvent.click(screen.getByRole('button', {name: /add to list/i}))
+  })
+
+  await waitForLoadingToFinish()
+
+  expect(screen.getByRole('heading', {name: book.title})).toBeInTheDocument()
+  expect(screen.getByText(book.author)).toBeInTheDocument()
+  expect(screen.getByText(book.publisher)).toBeInTheDocument()
+  expect(screen.getByText(book.synopsis)).toBeInTheDocument()
+  expect(screen.getByRole('img', {name: /book cover/i})).toHaveAttribute(
+    'src',
+    book.coverImageUrl,
+  )
+  expect(screen.queryByLabelText(/add to list/i)).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('button', {name: /remove from list/i}),
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole('button', {name: /mark as read/i}),
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole('button', {name: /mark as unread/i}),
+  ).not.toBeInTheDocument()
+  expect(screen.queryByLabelText(/notes/i)).toBeInTheDocument()
+  expect(screen.queryByRole('radio', {name: /star/i})).not.toBeInTheDocument()
+  expect(screen.queryByLabelText(/start date/i)).toBeInTheDocument()
+})
+
+test('can remove a list item for the book', async () => {
+  await renderBookScreen()
+
+  const removeFromListButton = screen.getByRole('button', {
+    name: /remove from list/i,
+  })
+
+  userEvent.click(removeFromListButton)
+  expect(removeFromListButton).toBeDisabled()
+
+  await waitForLoadingToFinish()
+
+  expect(screen.getByRole('button', {name: /add to list/i})).toBeInTheDocument()
+
+  expect(
+    screen.queryByRole('button', {name: /remove from list/i}),
+  ).not.toBeInTheDocument()
+})
+
+test('can mark a list item as read', async () => {
+  const {listItem} = await renderBookScreen()
+  await listItemsDB.update(listItem.id, {finishDate: null})
+
+  const markAsReadButton = screen.getByRole('button', {name: /mark as read/i})
+  userEvent.click(markAsReadButton)
+  expect(markAsReadButton).toBeDisabled()
+
+  await waitForLoadingToFinish()
+
+  expect(
+    screen.getByRole('button', {name: /mark as unread/i}),
+  ).toBeInTheDocument()
+  expect(screen.getAllByRole('radio', {name: /star/i})).toHaveLength(5)
+
+  const startAndFinishDateNode = screen.getByLabelText(/start and finish date/i)
+  expect(startAndFinishDateNode).toHaveTextContent(
+    `${formatDate(listItem.startDate)} — ${formatDate(Date.now())}`,
+  )
+
+  expect(
+    screen.queryByRole('button', {name: /mark as read/i}),
+  ).not.toBeInTheDocument()
+})
+
+test('can edit a note', async () => {
+  jest.useFakeTimers()
+  const {listItem} = await renderBookScreen()
+  const newNotes = faker.lorem.words()
+  const notesTextarea = screen.getByRole('textbox', {name: /notes/i})
+
+  userEvent.clear(notesTextarea)
+  userEvent.type(notesTextarea, newNotes)
+
+  await screen.findByLabelText(/loading/i)
+
+  await waitForLoadingToFinish()
+
+  expect(notesTextarea).toHaveValue(newNotes)
+
+  expect(await listItemsDB.read(listItem.id)).toMatchObject({
+    notes: newNotes,
+  })
+})
+
+describe('console errors', () => {
+  beforeAll(() => {
+    jest.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterAll(() => {
+    console.error.mockRestore()
+  })
+
+  test('shows an error message when the book fails to load', async () => {
+    const book = {id: 'bad-id'}
+    renderBookScreen({book, listItem: null})
+    expect(
+      (await screen.findByRole('alert')).textContent,
+    ).toMatchInlineSnapshot(`"There was an error: Book not found"`)
+  })
+
+  test('note update failures are displayed', async () => {
+    const apiURL = process.env.REACT_APP_API_URL
+
+    jest.useFakeTimers()
+    await renderBookScreen()
+
+    const newNotes = faker.lorem.words()
+    const notesTextarea = screen.getByRole('textbox', {name: /notes/i})
+
+    const testErrorMessage = '__test_error_message__'
+    server.use(
+      rest.put(`${apiURL}/list-items/:listItemId`, async (req, res, ctx) => {
+        return res(
+          ctx.status(400),
+          ctx.json({status: 400, message: testErrorMessage}),
+        )
+      }),
     )
-    expect(
-      screen.getByRole('button', {name: /add to list/i}),
-    ).toBeInTheDocument()
-    expect(
-      screen.queryByRole('button', {name: /remove from list/i}),
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole('button', {name: /mark as read/i}),
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole('button', {name: /mark as unread/i}),
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole('textarea', {name: /notes/i}),
-    ).not.toBeInTheDocument()
-    expect(screen.queryByRole('radio', {name: /star/i})).not.toBeInTheDocument()
-    expect(screen.queryByLabelText(/start date/i)).not.toBeInTheDocument()
+
+    userEvent.type(notesTextarea, newNotes)
+
+    await screen.findByLabelText(/loading/i)
+
+    await waitForLoadingToFinish()
+
+    expect(screen.getByRole('alert').textContent).toMatchInlineSnapshot(
+      `"There was an error: __test_error_message__"`,
+    )
   })
 })
